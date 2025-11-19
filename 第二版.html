@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小栗帽的美味挑戰！</title>
+    <style>
+        /* --- 遊戲樣式設定 --- */
+        :root {
+            --primary-color: #70a1ff;
+            --bg-color: #f0f8ff;
+            --board-bg: #ffffff;
+            --timer-color: #ff4757;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none; /* 防止選取文字 */
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 480px; /* 手機版型 */
+            height: 100%;
+            max-height: 800px;
+            background-color: var(--board-bg);
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 頂部資訊列 */
+        #top-bar {
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.2rem;
+            font-weight: bold;
+            background: rgba(255,255,255,0.9);
+            z-index: 10;
+        }
+        .score-box { color: #2ed573; }
+        .time-box { color: var(--timer-color); }
+
+        /* 遊戲主畫面 (小栗帽區域) */
+        #main-area {
+            flex: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-image: radial-gradient(#e0e0e0 10%, transparent 10%);
+            background-size: 20px 20px;
+        }
+
+        /* 小栗帽本體 (現在是 div 包裹 img) */
+        #oguri-character {
+            position: relative;
+            transition: transform 0.2s;
+            cursor: pointer;
+            /* 簡單的呼吸動畫 */
+            animation: breathe 2s infinite ease-in-out;
+            display: flex; /* 讓圖片能置中 */
+            justify-content: center;
+            align-items: center;
+        }
+
+        #oguri-character img {
+            max-width: 100%; /* 確保圖片不超出容器 */
+            height: auto;
+            display: block; /* 移除圖片底部多餘空間 */
+            transition: all 0.2s ease-out; /* 讓表情變化更平滑 */
+        }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+
+        /* 思考氣泡 (她想吃的東西) */
+        #thought-bubble {
+            position: absolute;
+            top: -20px; /* 相對於 #oguri-character 的位置 */
+            right: -20px;
+            background: white;
+            border: 3px solid #333;
+            border-radius: 50%;
+            width: 80px;
+            height: 80px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 3rem;
+            box-shadow: 3px 3px 0px rgba(0,0,0,0.2);
+            opacity: 0;
+            transform: scale(0);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #thought-bubble.show {
+            opacity: 1;
+            transform: scale(1);
+            top: 20px; /* 最終位置 */
+            right: 20px;
+        }
+
+        /* 表情變化 CSS Class (應用在 #oguri-character 上) */
+        #oguri-character.happy img { filter: drop-shadow(0 0 15px gold) brightness(1.1); transform: scale(1.05); }
+        #oguri-character.sad img { filter: grayscale(0.8) brightness(0.8); transform: scale(0.95); }
+
+        /* 底部食物選擇區 */
+        #food-tray {
+            background: #fff;
+            padding: 20px;
+            border-top: 2px solid #eee;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr); /* 4欄 */
+            gap: 10px;
+            height: 120px;
+        }
+
+        .food-btn {
+            background: #f1f2f6;
+            border: none;
+            border-radius: 15px;
+            font-size: 2.5rem;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.2s;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 4px 0 #dfe4ea;
+        }
+
+        .food-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #dfe4ea;
+        }
+
+        /* 連擊文字特效 */
+        #combo-text {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 3rem;
+            font-weight: 900;
+            color: #ffbf00;
+            text-shadow: 2px 2px 0 #fff, -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff;
+            pointer-events: none;
+            opacity: 0;
+            z-index: 20;
+        }
+        @keyframes popUp {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+            50% { transform: translate(-50%, -80%) scale(1.5); opacity: 1; }
+            100% { transform: translate(-50%, -100%) scale(1); opacity: 0; }
+        }
+
+        /* 覆蓋層 (開始/結束畫面) */
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 100;
+            text-align: center;
+        }
+        .overlay h1 { font-size: 2.5rem; margin-bottom: 10px; color: #ff9ff3; text-shadow: 2px 2px #000; }
+        .overlay p { font-size: 1.2rem; margin-bottom: 30px; color: #ddd; }
+        .btn-start {
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            background: #ff6b81;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 5px 0 #c44569;
+            transition: transform 0.1s;
+        }
+        .btn-start:active { transform: translateY(5px); box-shadow: none; }
+        
+        .hidden { display: none !important; }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        
+        <div id="top-bar">
+            <div class="time-box">時間: <span id="timer">60</span></div>
+            <div class="score-box">分數: <span id="score">0</span></div>
+        </div>
+
+        <div id="main-area">
+            <div id="oguri-character">
+                <img src="oguri_normal.png" id="oguri-img" alt="小栗帽" style="width: 250px; height: auto;">
+                <div id="thought-bubble">🥕</div>
+            </div>
+            
+            <div id="combo-text">Combo!</div>
+        </div>
+
+        <div id="food-tray">
+            </div>
+
+        <div id="start-screen" class="overlay">
+            <h1>小栗帽的<br>美味挑戰</h1>
+            <p>看準氣泡裡的食物，點擊下方對應按鈕！<br>不要讓小栗帽餓肚子！</p>
+            <button class="btn-start" onclick="game.start()">開始餵食！</button>
+        </div>
+
+        <div id="game-over-screen" class="overlay hidden">
+            <h1>遊戲結束</h1>
+            <p>最終得分: <span id="final-score">0</span></p>
+            <p id="comment">評語載入中...</p>
+            <button class="btn-start" onclick="game.start()">再來一碗！</button>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 遊戲設定與資料 ---
+        const FOOD_ITEMS = [
+            { id: 'carrot', icon: '🥕', name: '胡蘿蔔' },
+            { id: 'donut', icon: '🍩', name: '甜甜圈' },
+            { id: 'onigiri', icon: '🍙', name: '飯糰' },
+            { id: 'pudding', icon: '🍮', name: '布丁' },
+            { id: 'burger', icon: '🍔', name: '漢堡' },
+            { id: 'cake', icon: '🍰', name: '蛋糕' },
+            { id: 'icecream', icon: '🍦', name: '冰淇淋' },
+            { id: 'apple', icon: '🍎', name: '蘋果' }
+        ];
+
+        // --- 遊戲邏輯核心 ---
+        const game = {
+            timeLimit: 60,
+            timeLeft: 60,
+            score: 0,
+            combo: 0,
+            isPlaying: false,
+            timerInterval: null,
+            currentRequest: null,
+            
+            // DOM 元素快取
+            elements: {
+                oguri: document.getElementById('oguri-character'),
+                oguriImg: document.getElementById('oguri-img'), // 新增這一行
+                bubble: document.getElementById('thought-bubble'),
+                tray: document.getElementById('food-tray'),
+                timerDisplay: document.getElementById('timer'),
+                scoreDisplay: document.getElementById('score'),
+                comboText: document.getElementById('combo-text'),
+                startScreen: document.getElementById('start-screen'),
+                gameOverScreen: document.getElementById('game-over-screen'),
+                finalScore: document.getElementById('final-score'),
+                comment: document.getElementById('comment')
+            },
+
+            // 初始化
+            init: function() {
+                this.renderTray();
+            },
+
+            // 渲染底部按鈕
+            renderTray: function() {
+                this.elements.tray.innerHTML = '';
+                const shuffledFoods = [...FOOD_ITEMS].sort(() => 0.5 - Math.random()).slice(0, 4);
+                
+                shuffledFoods.forEach(food => {
+                    const btn = document.createElement('button');
+                    btn.className = 'food-btn';
+                    btn.innerHTML = food.icon; // 注意這裡用 innerHTML 因為 icon 可能有 img 標籤
+                    btn.onclick = () => this.feed(food);
+                    this.elements.tray.appendChild(btn);
+                });
+                
+                this.activeFoods = shuffledFoods;
+            },
+
+            // 開始遊戲
+            start: function() {
+                this.score = 0;
+                this.timeLeft = this.timeLimit;
+                this.combo = 0;
+                this.isPlaying = true;
+                
+                this.elements.startScreen.classList.add('hidden');
+                this.elements.gameOverScreen.classList.add('hidden');
+                this.updateUI();
+                
+                this.renderTray();
+                
+                this.newRequest();
+                
+                clearInterval(this.timerInterval);
+                this.timerInterval = setInterval(() => {
+                    this.timeLeft--;
+                    this.updateUI();
+                    if (this.timeLeft <= 0) {
+                        this.end();
+                    }
+                }, 1000);
+            },
+
+            // 產生新的想吃食物
+            newRequest: function() {
+                if (!this.isPlaying) return;
+                
+                const randomIndex = Math.floor(Math.random() * this.activeFoods.length);
+                this.currentRequest = this.activeFoods[randomIndex];
+                
+                this.elements.bubble.innerHTML = this.currentRequest.icon; // 注意這裡用 innerHTML
+                this.elements.bubble.classList.remove('show');
+                
+                setTimeout(() => {
+                    this.elements.bubble.classList.add('show');
+                    // 恢復正常表情，但如果沒有其他圖片，就不需要改變 src
+                    this.elements.oguri.classList.remove('happy', 'sad'); 
+                    this.elements.oguriImg.src = 'oguri_normal.png'; // 確保恢復預設圖片
+                }, 100);
+            },
+
+            // 玩家餵食動作
+            feed: function(food) {
+                if (!this.isPlaying) return;
+
+                if (food.id === this.currentRequest.id) {
+                    // 答對了
+                    this.combo++;
+                    const points = 10 + (Math.min(this.combo, 10) * 2);
+                    this.score += points;
+                    
+                    this.showComboAnim();
+                    this.oguriReact('happy');
+                    this.newRequest();
+                } else {
+                    // 答錯了
+                    this.combo = 0;
+                    this.oguriReact('sad');
+                    this.timeLeft = Math.max(0, this.timeLeft - 2);
+                }
+                this.updateUI();
+            },
+
+            // 小栗帽反應動畫
+            oguriReact: function(mood) {
+                const img = this.elements.oguriImg;
+                const oguriContainer = this.elements.oguri;
+
+                // 清除所有表情相關的 class
+                oguriContainer.classList.remove('happy', 'sad');
+
+                if(mood === 'happy') {
+                    // 如果您有 oguri_happy.png, 請將下方註解取消
+                    // img.src = 'oguri_happy.png';
+                    oguriContainer.classList.add('happy');
+                } else if(mood === 'sad') {
+                    // 如果您有 oguri_sad.png, 請將下方註解取消
+                    // img.src = 'oguri_sad.png';
+                    oguriContainer.classList.add('sad');
+                }
+                
+                // 延遲一段時間後恢復正常圖片和狀態
+                setTimeout(() => {
+                    if (this.isPlaying) { 
+                        img.src = 'oguri_normal.png'; // 恢復到您提供的預設圖片
+                        oguriContainer.classList.remove('happy', 'sad');
+                    }
+                }, 600); // 0.6 秒後恢復
+            },
+
+            // 連擊特效
+            showComboAnim: function() {
+                if (this.combo < 2) return;
+                const el = this.elements.comboText;
+                el.innerText = this.combo + " 連擊!";
+                el.style.animation = 'none';
+                el.offsetHeight; /* trigger reflow */
+                el.style.animation = 'popUp 0.6s ease-out';
+            },
+
+            // 更新介面文字
+            updateUI: function() {
+                this.elements.timerDisplay.innerText = this.timeLeft;
+                this.elements.scoreDisplay.innerText = this.score;
+            },
+
+            // 遊戲結束
+            end: function() {
+                this.isPlaying = false;
+                clearInterval(this.timerInterval);
+                
+                this.elements.finalScore.innerText = this.score;
+                
+                let comment = "";
+                if (this.score < 100) comment = "小栗帽還沒吃飽呢...";
+                else if (this.score < 300) comment = "不錯！小栗帽很開心！";
+                else if (this.score < 500) comment = "太厲害了！大胃王滿足！";
+                else comment = "傳說中的訓練師！這就是蘆毛怪物的實力！";
+                
+                this.elements.comment.innerText = comment;
+                this.elements.gameOverScreen.classList.remove('hidden');
+
+                // 遊戲結束後恢復圖片到預設狀態
+                this.elements.oguriImg.src = 'oguri_normal.png';
+                this.elements.oguri.classList.remove('happy', 'sad');
+            }
+        };
+
+        // 啟動初始化
+        game.init();
+
+    </script>
+</body>
+</html>
