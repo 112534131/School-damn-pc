@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>簡易網頁版 Minecraft 原型</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: monospace; }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 20px; height: 20px;
+            background: transparent;
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #crosshair::after {
+            content: ''; position: absolute; top: 50%; left: 50%;
+            width: 4px; height: 4px; background: white;
+            transform: translate(-50%, -50%);
+        }
+        #instructions {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            color: white; cursor: pointer; z-index: 20;
+        }
+        #ui-bar {
+            position: absolute; bottom: 10px; left: 50%;
+            transform: translateX(-50%);
+            display: flex; gap: 5px;
+            background: rgba(0,0,0,0.5); padding: 5px;
+            border-radius: 5px; pointer-events: none;
+        }
+        .slot {
+            width: 40px; height: 40px; border: 2px solid #555;
+            display: flex; justify-content: center; align-items: center;
+            font-size: 20px; color: white; text-shadow: 1px 1px 0 #000;
+        }
+        .active { border-color: white; background: rgba(255,255,255,0.2); }
+        
+        #info {
+            position: absolute; top: 10px; left: 10px; color: white;
+            background: rgba(0,0,0,0.3); padding: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="crosshair"></div>
+    
+    <div id="instructions">
+        <h1>Voxel World 3D</h1>
+        <p>點擊畫面開始遊戲</p>
+        <p>W, A, S, D 移動 | 空白鍵 跳躍</p>
+        <p>滑鼠左鍵: 破壞 | 滑鼠右鍵: 放置</p>
+        <p>數字鍵 1-5: 切換方塊</p>
+    </div>
+
+    <div id="ui-bar">
+        <div class="slot active" id="slot-1" style="background-color: #5da130;">1</div>
+        <div class="slot" id="slot-2" style="background-color: #795548;">2</div>
+        <div class="slot" id="slot-3" style="background-color: #9e9e9e;">3</div>
+        <div class="slot" id="slot-4" style="background-color: #8d6e63;">4</div>
+        <div class="slot" id="slot-5" style="background-color: #b71c1c;">5</div>
+    </div>
+
+    <div id="info">方塊數: <span id="block-count">0</span></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // --- 變數設定 ---
+        let camera, scene, renderer, controls;
+        const objects = []; // 存放所有方塊以便檢測
+        let raycaster;
+        
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let canJump = false;
+
+        let prevTime = performance.now();
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+
+        // 當前選擇的方塊材質索引
+        let currentMaterialIndex = 0;
+        // 定義材質 (顏色代替貼圖以簡化程式碼)
+        const materials = [
+            new THREE.MeshLambertMaterial({ color: 0x5da130 }), // 1. 草地 (綠)
+            new THREE.MeshLambertMaterial({ color: 0x795548 }), // 2. 泥土 (棕)
+            new THREE.MeshLambertMaterial({ color: 0x9e9e9e }), // 3. 石頭 (灰)
+            new THREE.MeshLambertMaterial({ color: 0x8d6e63 }), // 4. 木頭 (深棕)
+            new THREE.MeshLambertMaterial({ color: 0xb71c1c })  // 5. 磚塊 (紅)
+        ];
+        
+        // 幾何體共用 (效能優化)
+        const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+        // 選取框
+        let rollOverMesh, rollOverMaterial;
+
+        init();
+        animate();
+
+        function init() {
+            // 1. 場景與迷霧
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // 天空藍
+            scene.fog = new THREE.Fog(0x87CEEB, 0, 70); // 簡單迷霧效果
+
+            // 2. 燈光
+            const ambientLight = new THREE.AmbientLight(0xcccccc);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
+            directionalLight.position.set(1, 1, 0.5).normalize();
+            scene.add(directionalLight);
+
+            // 3. 相機
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = 2; // 玩家高度
+
+            // 4. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // 5. 控制器 (PointerLock)
+            controls = new PointerLockControls(camera, document.body);
+
+            const instructions = document.getElementById('instructions');
+            instructions.addEventListener('click', function () {
+                controls.lock();
+            });
+
+            controls.addEventListener('lock', function () {
+                instructions.style.display = 'none';
+            });
+
+            controls.addEventListener('unlock', function () {
+                instructions.style.display = 'flex';
+            });
+
+            scene.add(controls.getObject());
+
+            // 6. 按鍵監聽
+            const onKeyDown = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp': case 'KeyW': moveForward = true; break;
+                    case 'ArrowLeft': case 'KeyA': moveLeft = true; break;
+                    case 'ArrowDown': case 'KeyS': moveBackward = true; break;
+                    case 'ArrowRight': case 'KeyD': moveRight = true; break;
+                    case 'Space':
+                        if (canJump === true) velocity.y += 20; // 跳躍力道
+                        canJump = false;
+                        break;
+                    // 物品欄切換
+                    case 'Digit1': selectSlot(0); break;
+                    case 'Digit2': selectSlot(1); break;
+                    case 'Digit3': selectSlot(2); break;
+                    case 'Digit4': selectSlot(3); break;
+                    case 'Digit5': selectSlot(4); break;
+                }
+            };
+
+            const onKeyUp = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp': case 'KeyW': moveForward = false; break;
+                    case 'ArrowLeft': case 'KeyA': moveLeft = false; break;
+                    case 'ArrowDown': case 'KeyS': moveBackward = false; break;
+                    case 'ArrowRight': case 'KeyD': moveRight = false; break;
+                }
+            };
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+
+            // 7. 射線檢測 (用於放置/破壞)
+            raycaster = new THREE.Raycaster();
+            raycaster.near = 0.1; // 最近距離
+            raycaster.far = 8;    // 最遠挖掘距離
+
+            // 8. 預覽框 (顯示當前指著的位置)
+            rollOverMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, opacity: 0.5, transparent: true, wireframe: true });
+            rollOverMesh = new THREE.Mesh(boxGeometry, rollOverMaterial);
+            scene.add(rollOverMesh);
+
+            // 9. 生成初始世界 (地面)
+            generateWorld();
+
+            // 10. 滑鼠點擊事件 (破壞與放置)
+            document.addEventListener('mousedown', onDocumentMouseDown);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function generateWorld() {
+            // 產生 20x20 的地板
+            const floorSize = 20;
+            for (let x = -floorSize; x <= floorSize; x++) {
+                for (let z = -floorSize; z <= floorSize; z++) {
+                    // 隨機高度 0 或 1
+                    const height = Math.random() > 0.8 ? 1 : 0; 
+                    for (let y = 0; y <= height; y++) {
+                        // 地面使用草地(索引0)或泥土(索引1)
+                        const matIndex = y === height ? 0 : 1; 
+                        createBlock(x, y - 2, z, materials[matIndex]); // y-2 讓地板在腳下
+                    }
+                }
+            }
+        }
+
+        function createBlock(x, y, z, material) {
+            const voxel = new THREE.Mesh(boxGeometry, material);
+            voxel.position.set(x, y, z);
+            scene.add(voxel);
+            objects.push(voxel); // 加入物理檢測陣列
+            updateBlockCount();
+        }
+
+        function selectSlot(index) {
+            currentMaterialIndex = index;
+            // UI 更新
+            for(let i=1; i<=5; i++) document.getElementById(`slot-${i}`).classList.remove('active');
+            document.getElementById(`slot-${index+1}`).classList.add('active');
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onDocumentMouseDown(event) {
+            if (!controls.isLocked) return; // 沒鎖定游標時不動作
+
+            // 設定射線從螢幕中心發出
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const intersects = raycaster.intersectObjects(objects, false);
+
+            if (intersects.length > 0) {
+                const intersect = intersects[0];
+
+                // 左鍵 (0) = 破壞, 右鍵 (2) = 放置
+                if (event.button === 0) {
+                    // 破壞方塊
+                    if (intersect.object !== undefined) {
+                        scene.remove(intersect.object);
+                        objects.splice(objects.indexOf(intersect.object), 1);
+                        updateBlockCount();
+                    }
+                } else if (event.button === 2) {
+                    // 放置方塊
+                    // 根據法線(Normal)決定新方塊位置
+                    const p = intersect.point.add(intersect.face.normal.multiplyScalar(0.1));
+                    // 座標取整數對齊網格
+                    const x = Math.floor(p.x + 0.5);
+                    const y = Math.floor(p.y + 0.5);
+                    const z = Math.floor(p.z + 0.5);
+                    
+                    // 簡單碰撞檢查：不能放在玩家身體裡
+                    const playerPos = controls.getObject().position;
+                    const dist = Math.sqrt(Math.pow(x - playerPos.x, 2) + Math.pow(y - (playerPos.y-1), 2) + Math.pow(z - playerPos.z, 2));
+                    
+                    if (dist > 1.2) { // 如果距離玩家夠遠才放置
+                        createBlock(x, y, z, materials[currentMaterialIndex]);
+                    }
+                }
+            }
+        }
+
+        function updateBlockCount() {
+            document.getElementById('block-count').innerText = objects.length;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            
+            if (controls.isLocked === true) {
+                // --- 物理與移動邏輯 ---
+                const delta = (time - prevTime) / 1000;
+
+                // 摩擦力與重力
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                velocity.y -= 9.8 * 5.0 * delta; // 100.0 = 質量
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize(); // 確保斜向移動速度一致
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta; // 速度
+                if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+
+                // 更新位置
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+                controls.getObject().position.y += (velocity.y * delta); // 處理垂直移動
+
+                // --- 簡單的地板碰撞檢測 ---
+                // 這裡簡化處理：如果 y 低於某個高度，就視為撞到地板
+                // 在完整的 Minecraft 中，這裡需要複雜的 AABB 碰撞檢測
+                
+                // 這裡使用一個簡單的射線向下檢測來模擬 "站在方塊上"
+                // 為了效能和程式碼長度，我們只做一個 "地面高度" 鎖定
+                // 真正的碰撞檢測需要更長的程式碼
+                
+                let onObject = false;
+                // 向下發射射線檢測腳下有沒有方塊
+                const playerPos = controls.getObject().position.clone();
+                const raycasterDown = new THREE.Raycaster(playerPos, new THREE.Vector3(0, -1, 0), 0, 2); 
+                const intersectsDown = raycasterDown.intersectObjects(objects);
+
+                if (intersectsDown.length > 0) {
+                   // 如果腳下有東西，且速度是向下掉的
+                   if (velocity.y < 0) {
+                       // 將玩家位置固定在方塊上方
+                       velocity.y = Math.max(0, velocity.y);
+                       canJump = true;
+                       
+                       // 簡單修正高度 (防止陷入)
+                       const targetY = intersectsDown[0].point.y + 1.5; // 1.5 是眼睛高度
+                       if (controls.getObject().position.y < targetY) {
+                           controls.getObject().position.y = targetY;
+                       }
+                   }
+                } else {
+                    // 如果掉到太深 (虛空)，重置位置
+                    if (controls.getObject().position.y < -10) {
+                        velocity.y = 0;
+                        controls.getObject().position.set(0, 5, 0);
+                    }
+                }
+
+                // --- 預覽框更新 ---
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(objects);
+                if (intersects.length > 0) {
+                    const intersect = intersects[0];
+                    // 顯示在被指到的方塊位置
+                    rollOverMesh.position.copy(intersect.object.position);
+                    rollOverMesh.visible = true;
+                } else {
+                    rollOverMesh.visible = false;
+                }
+            }
+
+            prevTime = time;
+            renderer.render(scene, camera);
+        }
+
+    </script>
+</body>
+</html>

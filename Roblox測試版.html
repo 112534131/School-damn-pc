@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>Blox Obby - 網頁版跑酷</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Arial', sans-serif; background-color: #232527; }
+        
+        /* 仿 Roblox 頂部選單 */
+        #top-bar {
+            position: absolute; top: 0; left: 0; width: 100%; height: 40px;
+            background: rgba(35, 37, 39, 0.9);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 20px; box-sizing: border-box; z-index: 100;
+            color: white; font-weight: bold; font-size: 14px;
+        }
+        .logo { display: flex; align-items: center; gap: 10px; }
+        .logo-box { width: 24px; height: 24px; background: white; border-radius: 4px; transform: rotate(15deg); }
+        
+        /* 遊戲 UI */
+        #game-ui {
+            position: absolute; pointer-events: none;
+            width: 100%; height: 100%;
+        }
+        #instruction-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8); color: white; padding: 20px;
+            border-radius: 10px; text-align: center; pointer-events: auto;
+        }
+        .btn {
+            background: #00b06f; color: white; border: none; padding: 10px 20px;
+            font-size: 16px; border-radius: 5px; cursor: pointer; margin-top: 10px;
+            font-weight: bold;
+        }
+        .btn:hover { background: #009e63; }
+        
+        #leaderboard {
+            position: absolute; top: 50px; right: 10px;
+            background: rgba(0,0,0,0.5); color: white;
+            padding: 10px; border-radius: 5px; font-size: 12px;
+            width: 150px;
+        }
+        
+        /* 死亡特效文字 */
+        #oof-text {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 48px; font-weight: bold; color: red;
+            text-shadow: 2px 2px 0 black; opacity: 0; pointer-events: none;
+            transition: opacity 0.2s;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="top-bar">
+        <div class="logo">
+            <div class="logo-box"></div>
+            <span>Blox Obby [BETA]</span>
+        </div>
+        <div>玩家: Guest_666</div>
+    </div>
+
+    <div id="game-ui">
+        <div id="leaderboard">
+            <p>🏆 排行榜</p>
+            <p>1. Guest_666 - 0</p>
+        </div>
+        <div id="oof-text">OOF!</div>
+    </div>
+
+    <div id="instruction-overlay">
+        <h1>歡迎來到 Blox Obby!</h1>
+        <p>目標：跳過障礙物到達終點</p>
+        <p><b>WASD</b> 移動 | <b>空白鍵</b> 跳躍</p>
+        <p><b>滑鼠</b> 旋轉視角</p>
+        <p>碰到 <span style="color:red">紅色方塊</span> 會死亡！</p>
+        <button class="btn" id="start-btn">開始遊戲</button>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- 遊戲變數 ---
+        let camera, scene, renderer;
+        let player, playerBody, playerHead, leftArm, rightArm, leftLeg, rightLeg;
+        const obstacles = []; // 碰撞物件
+        const killBricks = []; // 致死物件
+        
+        // 物理變數
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let onGround = false;
+        const gravity = 35.0;
+        const jumpForce = 15.0;
+        const speed = 10.0;
+        
+        // 控制變數
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let isLocked = false;
+        
+        // 動畫變數
+        let walkTime = 0;
+
+        // 相機變數 (第三人稱)
+        let cameraAngleX = 0;
+        let cameraAngleY = 0;
+        const cameraDistance = 6;
+
+        init();
+        animate();
+
+        function init() {
+            // 1. 場景設置
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // 經典天空藍
+            scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+
+            // 2. 燈光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.top = 20;
+            dirLight.shadow.camera.bottom = -20;
+            dirLight.shadow.camera.left = -20;
+            dirLight.shadow.camera.right = 20;
+            scene.add(dirLight);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+
+            // 4. 相機
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            // 5. 創建玩家 (經典 Noob 造型)
+            createPlayer();
+
+            // 6. 創建關卡 (Obby)
+            createLevel();
+
+            // 7. 事件監聽
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousemove', onMouseMove);
+            
+            const startBtn = document.getElementById('start-btn');
+            startBtn.addEventListener('click', () => {
+                document.body.requestPointerLock();
+                document.getElementById('instruction-overlay').style.display = 'none';
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                isLocked = document.pointerLockElement === document.body;
+                if(!isLocked) document.getElementById('instruction-overlay').style.display = 'block';
+            });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createPlayer() {
+            player = new THREE.Group();
+            
+            // 材質
+            const headMat = new THREE.MeshLambertMaterial({ color: 0xF5CD30 }); // 黃頭
+            const torsoMat = new THREE.MeshLambertMaterial({ color: 0x0D69AC }); // 藍衣
+            const limbMat = new THREE.MeshLambertMaterial({ color: 0xA4BD47 }); // 綠褲/手
+            
+            // 幾何體
+            const headGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+            const torsoGeo = new THREE.BoxGeometry(1.6, 1.6, 0.8);
+            const limbGeo = new THREE.BoxGeometry(0.8, 1.6, 0.8); // 手腳一樣大
+
+            // 身體部位
+            playerHead = new THREE.Mesh(headGeo, headMat);
+            playerHead.position.y = 2.0;
+            playerHead.castShadow = true;
+
+            const torso = new THREE.Mesh(torsoGeo, torsoMat);
+            torso.position.y = 0.8;
+            torso.castShadow = true;
+
+            // 手臂 (需要調整旋轉中心)
+            leftArm = new THREE.Mesh(limbGeo, headMat); // Roblox 手通常是黃色
+            leftArm.position.set(-1.2, 0.8, 0);
+            leftArm.castShadow = true;
+
+            rightArm = new THREE.Mesh(limbGeo, headMat);
+            rightArm.position.set(1.2, 0.8, 0);
+            rightArm.castShadow = true;
+
+            // 腿
+            leftLeg = new THREE.Mesh(limbGeo, limbMat);
+            leftLeg.position.set(-0.4, -0.8, 0);
+            leftLeg.castShadow = true;
+
+            rightLeg = new THREE.Mesh(limbGeo, limbMat);
+            rightLeg.position.set(0.4, -0.8, 0);
+            rightLeg.castShadow = true;
+
+            // 組裝
+            player.add(playerHead);
+            player.add(torso);
+            player.add(leftArm);
+            player.add(rightArm);
+            player.add(leftLeg);
+            player.add(rightLeg);
+
+            player.position.set(0, 5, 0); // 出生點
+            scene.add(player);
+        }
+
+        function createBlock(x, y, z, w, h, d, color, isKillBrick = false) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mat = new THREE.MeshLambertMaterial({ color: color });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            mesh.receiveShadow = true;
+            mesh.castShadow = true;
+            
+            // 模擬 Roblox 顆粒效果 (Studs) - 簡單用材質粗糙度
+            // 為了簡單，不加貼圖，用純色
+            
+            scene.add(mesh);
+
+            // 碰撞箱資料
+            const box = new THREE.Box3().setFromObject(mesh);
+            
+            if (isKillBrick) {
+                killBricks.push({ mesh: mesh, box: box });
+            } else {
+                obstacles.push({ mesh: mesh, box: box });
+            }
+            
+            return mesh;
+        }
+
+        function createLevel() {
+            // Baseplate (起點)
+            createBlock(0, -1, 0, 10, 2, 10, 0x666666);
+
+            // 階梯
+            createBlock(0, 0, -8, 4, 1, 4, 0xaaaaaa);
+            createBlock(0, 1, -14, 4, 1, 4, 0xaaaaaa);
+            createBlock(0, 2, -20, 4, 1, 4, 0xaaaaaa);
+
+            // 獨木橋
+            createBlock(0, 2, -30, 2, 1, 14, 0x8B4513);
+
+            // Kill Bricks (紅色岩漿區)
+            // 地板
+            createBlock(0, -5, -50, 20, 1, 20, 0x333333); 
+            // 致命方塊陣列
+            for(let i=0; i<5; i++) {
+                createBlock(-4 + i*2, -4.5, -50, 1.5, 1, 18, 0xFF0000, true);
+            }
+            
+            // 安全平台
+            createBlock(0, 2, -65, 6, 1, 6, 0x00FF00); // 檢查點/終點
+        }
+
+        // --- 輸入處理 ---
+        function onKeyDown(e) {
+            switch (e.code) {
+                case 'ArrowUp': case 'KeyW': moveForward = true; break;
+                case 'ArrowLeft': case 'KeyA': moveLeft = true; break;
+                case 'ArrowDown': case 'KeyS': moveBackward = true; break;
+                case 'ArrowRight': case 'KeyD': moveRight = true; break;
+                case 'Space': 
+                    if (onGround) {
+                        velocity.y = jumpForce;
+                        onGround = false;
+                    }
+                    break;
+                case 'KeyR': resetPlayer(); break;
+            }
+        }
+
+        function onKeyUp(e) {
+            switch (e.code) {
+                case 'ArrowUp': case 'KeyW': moveForward = false; break;
+                case 'ArrowLeft': case 'KeyA': moveLeft = false; break;
+                case 'ArrowDown': case 'KeyS': moveBackward = false; break;
+                case 'ArrowRight': case 'KeyD': moveRight = false; break;
+            }
+        }
+
+        function onMouseMove(e) {
+            if (isLocked) {
+                // 靈敏度
+                cameraAngleY -= e.movementX * 0.003;
+                cameraAngleX -= e.movementY * 0.003;
+
+                // 限制垂直角度 (不能看穿地板或翻轉)
+                cameraAngleX = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, cameraAngleX));
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function resetPlayer() {
+            player.position.set(0, 5, 0);
+            velocity.set(0, 0, 0);
+            cameraAngleY = 0;
+            cameraAngleX = 0;
+            
+            const oof = document.getElementById('oof-text');
+            oof.style.opacity = 1;
+            setTimeout(() => oof.style.opacity = 0, 1000);
+        }
+
+        // --- 物理與邏輯 ---
+        function checkCollision(newPos) {
+            // 玩家碰撞箱 (簡易版: 一個點或者小方塊)
+            const playerBox = new THREE.Box3();
+            playerBox.setFromCenterAndSize(newPos, new THREE.Vector3(1, 2, 1));
+
+            // 檢查障礙物
+            for (const obs of obstacles) {
+                if (playerBox.intersectsBox(obs.box)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function checkKillBricks() {
+            const playerBox = new THREE.Box3();
+            playerBox.setFromCenterAndSize(player.position, new THREE.Vector3(0.5, 1, 0.5));
+
+            for (const kb of killBricks) {
+                if (playerBox.intersectsBox(kb.box)) {
+                    resetPlayer();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function updatePlayerAnimation(dt) {
+            if (moveForward || moveBackward || moveLeft || moveRight) {
+                walkTime += dt * 10;
+                // 手腳擺動
+                const angle = Math.sin(walkTime) * 0.5;
+                leftLeg.rotation.x = -angle;
+                rightLeg.rotation.x = angle;
+                leftArm.rotation.x = angle;
+                rightArm.rotation.x = -angle;
+            } else {
+                // 歸位
+                leftLeg.rotation.x = 0;
+                rightLeg.rotation.x = 0;
+                leftArm.rotation.x = 0;
+                rightArm.rotation.x = 0;
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const dt = 0.016; // 固定時間步長
+
+            if (isLocked) {
+                // 1. 計算移動方向 (相對於相機水平視角)
+                direction.set(0, 0, 0);
+                if (moveForward) direction.z -= 1;
+                if (moveBackward) direction.z += 1;
+                if (moveLeft) direction.x -= 1;
+                if (moveRight) direction.x += 1;
+                direction.normalize();
+
+                // 旋轉方向向量以匹配相機 Y 軸旋轉
+                direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngleY);
+
+                // 2. 應用速度與重力
+                if (moveForward || moveBackward || moveLeft || moveRight) {
+                    velocity.x = direction.x * speed;
+                    velocity.z = direction.z * speed;
+                    
+                    // 讓角色面向移動方向
+                    const lookTarget = player.position.clone().add(direction);
+                    player.lookAt(lookTarget.x, player.position.y, lookTarget.z);
+                } else {
+                    velocity.x *= 0.9; // 摩擦力
+                    velocity.z *= 0.9;
+                }
+
+                velocity.y -= gravity * dt;
+
+                // 3. 簡易碰撞檢測與位置更新
+                // Y 軸 (地面檢測)
+                player.position.y += velocity.y * dt;
+                
+                // 地面碰撞邏輯 (非常簡易的 Raycast 模擬)
+                // 檢查是否落地
+                onGround = false;
+                const playerBottom = player.position.y - 1.6; // 腳底位置
+
+                // 簡單地面高度檢測 (遍歷所有方塊頂部)
+                // 這是一個很粗糙的方法，但在小型 Demo 中有效
+                for (const obs of obstacles) {
+                    // 如果在方塊的 XZ 範圍內
+                    if (player.position.x >= obs.box.min.x && player.position.x <= obs.box.max.x &&
+                        player.position.z >= obs.box.min.z && player.position.z <= obs.box.max.z) {
+                        
+                        // 且高度接近頂部
+                        if (playerBottom <= obs.box.max.y && playerBottom >= obs.box.max.y - 0.5 && velocity.y <= 0) {
+                            player.position.y = obs.box.max.y + 1.6;
+                            velocity.y = 0;
+                            onGround = true;
+                        }
+                    }
+                }
+
+                // X Z 軸移動
+                player.position.x += velocity.x * dt;
+                player.position.z += velocity.z * dt;
+
+                // 檢查是否掉落虛空
+                if (player.position.y < -20) {
+                    resetPlayer();
+                }
+                
+                // 檢查紅色方塊
+                checkKillBricks();
+                
+                // 更新動畫
+                updatePlayerAnimation(dt);
+            }
+
+            // 4. 更新相機位置 (第三人稱跟隨)
+            // 計算相機位置：基於球座標系
+            const camX = player.position.x + cameraDistance * Math.sin(cameraAngleY) * Math.cos(cameraAngleX);
+            const camZ = player.position.z + cameraDistance * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
+            const camY = player.position.y + cameraDistance * Math.sin(cameraAngleX) + 2; // +2 讓視角高一點
+
+            camera.position.set(camX, camY, camZ);
+            camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 1, 0))); // 看向玩家頭部附近
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
